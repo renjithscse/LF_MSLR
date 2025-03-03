@@ -29,6 +29,20 @@ gdown "https://zenodo.org/records/4010759"
    git clone https://github.com/renjithscse/LF_MSLR.git
    cd LF-MSLR
    ```
+   
+---
+
+### **3. `requirements.txt`**
+```txt
+opencv-python
+numpy
+tensorflow
+keras
+mediapipe
+torch
+torchvision
+torch-geometric
+
 2. **Install dependencies**:
    ```bash
    pip install -r requirements.txt
