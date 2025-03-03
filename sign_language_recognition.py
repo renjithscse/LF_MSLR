@@ -4,8 +4,8 @@ Sign Language Recognition using Multimodal Fusion
 This project implements a late fusion-based multimodal sign language recognition model 
 using RGB video frames, Optical Flow, and Skeleton Data.
 
-Author: Your Name
-GitHub: https://github.com/yourusername/LF-MSLR
+Author: S Renjith
+GitHub: https://github.com/renjithscse/LF_MSLR
 """
 
 import cv2
@@ -18,38 +18,70 @@ import torch
 import torch.nn.functional as F
 from torch_geometric.nn import GCNConv
 
-# --- 1. Keyframe Extraction using Optical Flow ---
-def extract_keyframes(video_path):
+# --- 1. Keyframe Extraction using Optical Flow and skeleton features---
+def compute_optical_flow(prev_frame, next_frame):
+    """Computes optical flow magnitude between consecutive frames."""
+    prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+    next_gray = cv2.cvtColor(next_frame, cv2.COLOR_BGR2GRAY)
+    
+    flow = cv2.calcOpticalFlowFarneback(prev_gray, next_gray, None, 
+                                        pyr_scale=0.5, levels=3, winsize=15, 
+                                        iterations=3, poly_n=5, poly_sigma=1.2, flags=0)
+    
+    magnitude, _ = cv2.cartToPolar(flow[..., 0], flow[..., 1])
+    return np.mean(magnitude)
+
+def compute_skeleton_change(skeleton_prev, skeleton_next):
+    """Computes Euclidean distance between consecutive skeleton frames."""
+    return np.linalg.norm(np.array(skeleton_next) - np.array(skeleton_prev))
+
+def keyframe_extraction(video_path, skeleton_data, alpha=1.5, beta=1.5):
     """
-    Extracts keyframes from a video based on Optical Flow motion intensity.
-
+    Extracts keyframes based on motion intensity (optical flow) and skeleton changes.
+    
     Parameters:
-        video_path (str): Path to the video file.
-
+    - video_path: Path to the input video.
+    - skeleton_data: List of skeleton keypoints for each frame.
+    - alpha, beta: Hyperparameters for threshold tuning.
+    
     Returns:
-        list: A list of keyframes (numpy arrays).
+    - keyframes: List of extracted keyframe indices.
     """
     cap = cv2.VideoCapture(video_path)
     ret, prev_frame = cap.read()
-    prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
-    
-    keyframes = []
-    motion_threshold = 20  # Experimentally tuned threshold
-    
-    while cap.isOpened():
-        ret, frame = cap.read()
+    motion_values = []
+    skeleton_values = []
+
+    frame_idx = 0
+    skeleton_prev = skeleton_data[frame_idx]
+
+    while True:
+        ret, next_frame = cap.read()
         if not ret:
             break
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        flow = cv2.calcOpticalFlowFarneback(prev_gray, gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
-        motion_intensity = np.linalg.norm(flow)
-
-        if motion_intensity > motion_threshold:
-            keyframes.append(frame)
         
-        prev_gray = gray.copy()
+        # Compute motion intensity (optical flow)
+        motion_values.append(compute_optical_flow(prev_frame, next_frame))
+
+        # Compute skeleton-based change
+        skeleton_next = skeleton_data[frame_idx + 1]
+        skeleton_values.append(compute_skeleton_change(skeleton_prev, skeleton_next))
+
+        prev_frame = next_frame
+        skeleton_prev = skeleton_next
+        frame_idx += 1
 
     cap.release()
+
+    # Compute thresholds
+    T_motion = np.mean(motion_values) + alpha * np.std(motion_values)
+    T_skeleton = np.mean(skeleton_values) + beta * np.std(skeleton_values)
+
+    keyframes = []
+    for i in range(len(motion_values)):
+        if motion_values[i] > T_motion or skeleton_values[i] > T_skeleton:
+            keyframes.append(i)
+
     return keyframes
 
 # --- 2. Skeleton Extraction using Mediapipe ---
