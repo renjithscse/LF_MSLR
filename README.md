@@ -64,10 +64,10 @@ torch-geometric
 If you use our work, please cite:
 ```
 @article{LFMSLR2024,
-  author    = {Your Name et al.},
+  author    = {S Renjith et al.},
   title     = {Multimodal Fusion of RGB Video, Optical Flow, and Skeleton Data for Enhanced Sign Language Recognition},
   journal   = {The Visual Computer},
-  year      = {2024},
+  year      = {2025},
 }
 ```
 
