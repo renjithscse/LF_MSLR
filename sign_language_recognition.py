@@ -182,4 +182,4 @@ if __name__ == "__main__":
     flow_features = np.array(flow_features)
     skeleton_features = np.array(skeleton_features)
 
-    train_fusion_model(rgb_features, flow_features, skeleton_features, labels=np.random.randint(0, 10, size=(len(rgb_features), 10)))  # Dummy labels
+    train_fusion_model(rgb_features, flow_features, skeleton_features, labels=np.random.randint(0, 10, size=(len(rgb_features), 10)))  
