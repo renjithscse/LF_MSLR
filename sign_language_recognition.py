@@ -17,6 +17,79 @@ from tensorflow.keras.layers import Conv2D, LSTM, Dense, Flatten, TimeDistribute
 import torch
 import torch.nn.functional as F
 from torch_geometric.nn import GCNConv
+import torch
+from torch.utils.data import Dataset, DataLoader
+from torchvision import transforms
+import os
+from PIL import Image
+import numpy as np
+import cv2
+import numpy as np
+import mediapipe as mp
+import os
+
+def extract_frames(video_path, output_dir, frame_rate=1):
+    """
+    Extract frames from a video at a specified frame rate.
+
+    Parameters:
+    - video_path: Path to the input video.
+    - output_dir: Directory to save extracted frames.
+    - frame_rate: Number of frames to skip between extractions.
+    """
+    cap = cv2.VideoCapture(video_path)
+    count = 0
+    success, frame = cap.read()
+    while success:
+        if count % frame_rate == 0:
+            cv2.imwrite(os.path.join(output_dir, f"frame_{count}.jpg"), frame)
+        success, frame = cap.read()
+        count += 1
+    cap.release()
+
+class SignLanguageDataset(Dataset):
+    def __init__(self, frames_dir, skeletons_file, labels_file, transform=None):
+        """
+        Initialize the dataset.
+
+        Parameters:
+        - frames_dir: Directory containing extracted frames.
+        - skeletons_file: Path to the file containing skeleton data.
+        - labels_file: Path to the file containing labels.
+        - transform: Transformations to apply to the frames.
+        """
+        self.frames_dir = frames_dir
+        self.skeletons = np.load(skeletons_file, allow_pickle=True).item()
+        self.labels = np.load(labels_file, allow_pickle=True).item()
+        self.transform = transform
+        self.frame_files = sorted(os.listdir(frames_dir))
+
+    def __len__(self):
+        return len(self.frame_files)
+
+    def __getitem__(self, idx):
+        frame_path = os.path.join(self.frames_dir, self.frame_files[idx])
+        frame = Image.open(frame_path).convert('RGB')
+        if self.transform:
+            frame = self.transform(frame)
+        skeleton = torch.tensor(self.skeletons[self.frame_files[idx]], dtype=torch.float32)
+        label = torch.tensor(self.labels[self.frame_files[idx]], dtype=torch.long)
+        return frame, skeleton, label
+
+# Example usage:
+transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+])
+
+dataset = SignLanguageDataset(frames_dir='data/frames',
+                              skeletons_file='data/skeletons.npy',
+                              labels_file='data/labels.npy',
+                              transform=transform)
+
+dataloader = DataLoader(dataset, batch_size=32, shuffle=True, num_workers=4)
+
 
 # --- 1. Optical Flow Estimation (Lucas-Kanade) ---
 def compute_optical_flow_lk(frame1, frame2, window_size=5, regularization=1e-4):
@@ -170,4 +243,29 @@ if __name__ == "__main__":
     flow_features = np.array(flow_features).reshape(-1, 1)
     skeleton_features = np.array(skeleton_features)
 
-    train_fusion_model(rgb_features, flow_features, skeleton_features, labels=np.random.randint(0, 10, size=(len(rgb_features), 10)))  
+    #train_fusion_model(rgb_features, flow_features, skeleton_features, labels=np.random.randint(0, 10, size=(len(rgb_features), 10)))  
+from dataloader import SignLanguageDataset
+from torch.utils.data import DataLoader
+from torchvision import transforms
+
+# Define transformations
+transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+])
+
+# Initialize dataset and dataloader
+dataset = SignLanguageDataset(frames_dir='data/frames',
+                              skeletons_file='data/skeletons.npy',
+                              labels_file='data/labels.npy',
+                              transform=transform)
+
+dataloader = DataLoader(dataset, batch_size=32, shuffle=True, num_workers=4)
+
+# Training loop
+for epoch in range(num_epochs):
+    for frames, skeletons, labels in dataloader:
+        # Forward pass, loss computation, backward pass, and optimization
+        pass
+
