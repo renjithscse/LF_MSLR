@@ -18,19 +18,56 @@ import torch
 import torch.nn.functional as F
 from torch_geometric.nn import GCNConv
 
-# --- 1. Keyframe Extraction using Optical Flow and skeleton features---
-def compute_optical_flow(prev_frame, next_frame):
-    """Computes optical flow magnitude between consecutive frames."""
-    prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
-    next_gray = cv2.cvtColor(next_frame, cv2.COLOR_BGR2GRAY)
-    
-    flow = cv2.calcOpticalFlowFarneback(prev_gray, next_gray, None, 
-                                        pyr_scale=0.5, levels=3, winsize=15, 
-                                        iterations=3, poly_n=5, poly_sigma=1.2, flags=0)
-    
-    magnitude, _ = cv2.cartToPolar(flow[..., 0], flow[..., 1])
-    return np.mean(magnitude)
+# --- 1. Optical Flow Estimation (Lucas-Kanade) ---
+def compute_optical_flow_lk(frame1, frame2, window_size=5, regularization=1e-4):
+    """
+    Compute Optical Flow using the Lucas-Kanade Method.
 
+    Parameters:
+        frame1 (numpy.ndarray): First frame (grayscale).
+        frame2 (numpy.ndarray): Second frame (grayscale).
+        window_size (int): Size of the local window for computing gradients.
+        regularization (float): Small constant to avoid singular matrices.
+
+    Returns:
+        u (numpy.ndarray): Optical flow in x-direction.
+        v (numpy.ndarray): Optical flow in y-direction.
+    """
+    # Convert to grayscale
+    frame1_gray = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
+    frame2_gray = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
+
+    # Compute Image Gradients
+    Ix = cv2.Sobel(frame1_gray, cv2.CV_64F, 1, 0, ksize=3)
+    Iy = cv2.Sobel(frame1_gray, cv2.CV_64F, 0, 1, ksize=3)
+    It = frame2_gray.astype(np.float64) - frame1_gray.astype(np.float64)
+
+    half_w = window_size // 2
+    u = np.zeros_like(frame1_gray, dtype=np.float64)
+    v = np.zeros_like(frame1_gray, dtype=np.float64)
+
+    for y in range(half_w, frame1_gray.shape[0] - half_w):
+        for x in range(half_w, frame1_gray.shape[1] - half_w):
+            Ix_win = Ix[y - half_w: y + half_w + 1, x - half_w: x + half_w + 1].flatten()
+            Iy_win = Iy[y - half_w: y + half_w + 1, x - half_w: x + half_w + 1].flatten()
+            It_win = It[y - half_w: y + half_w + 1, x - half_w: x + half_w + 1].flatten()
+
+            A = np.vstack((Ix_win, Iy_win)).T
+            b = -It_win.reshape(-1, 1)
+
+            if A.shape[0] >= 2:
+                AtA = A.T @ A
+                if np.linalg.det(AtA) > 1e-5:
+                    v_flow = np.linalg.inv(AtA) @ (A.T @ b)
+                else:
+                    v_flow = np.linalg.inv(AtA + regularization * np.eye(2)) @ (A.T @ b)
+
+                u[y, x] = v_flow[0, 0]
+                v[y, x] = v_flow[1, 0]
+
+    return u, v
+
+# --- 2. Keyframe Extraction using Optical Flow and Skeleton Features ---
 def compute_skeleton_change(skeleton_prev, skeleton_next):
     """Computes Euclidean distance between consecutive skeleton frames."""
     return np.linalg.norm(np.array(skeleton_next) - np.array(skeleton_prev))
@@ -59,9 +96,10 @@ def keyframe_extraction(video_path, skeleton_data, alpha=1.5, beta=1.5):
         ret, next_frame = cap.read()
         if not ret:
             break
-        
-        # Compute motion intensity (optical flow)
-        motion_values.append(compute_optical_flow(prev_frame, next_frame))
+
+        # Compute motion intensity (optical flow) using LK method
+        u, v = compute_optical_flow_lk(prev_frame, next_frame)
+        motion_values.append(np.mean(np.sqrt(u**2 + v**2)))  # Compute motion magnitude
 
         # Compute skeleton-based change
         skeleton_next = skeleton_data[frame_idx + 1]
@@ -84,7 +122,7 @@ def keyframe_extraction(video_path, skeleton_data, alpha=1.5, beta=1.5):
 
     return keyframes
 
-# --- 2. Skeleton Extraction using Mediapipe ---
+# --- 3. Skeleton Extraction using Mediapipe ---
 mp_pose = mp.solutions.pose
 def extract_skeleton(frame):
     """
@@ -106,80 +144,30 @@ def extract_skeleton(frame):
     
     return np.array(skeleton)
 
-# --- 3. CNN Feature Extraction ---
-def build_cnn_model(input_shape):
-    """
-    Builds a CNN-BiLSTM model for feature extraction and classification.
-
-    Parameters:
-        input_shape (tuple): Shape of the input data.
-
-    Returns:
-        Sequential: Compiled Keras model.
-    """
-    model = Sequential([
-        TimeDistributed(Conv2D(32, (3, 3), activation='relu'), input_shape=input_shape),
-        TimeDistributed(Flatten()),
-        Bidirectional(LSTM(128, return_sequences=False)),
-        Dense(128, activation='relu'),
-        Dense(10, activation='softmax')  # Adjust based on class count
-    ])
-    model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-    return model
-
-# --- 4. GCN for Skeleton Feature Extraction ---
-class GCN(torch.nn.Module):
-    """
-    Graph Convolutional Network (GCN) model for skeleton-based feature extraction.
-    """
-    def __init__(self, in_features, hidden_dim, out_features):
-        super(GCN, self).__init__()
-        self.conv1 = GCNConv(in_features, hidden_dim)
-        self.conv2 = GCNConv(hidden_dim, out_features)
-
-    def forward(self, x, edge_index):
-        x = F.relu(self.conv1(x, edge_index))
-        x = self.conv2(x, edge_index)
-        return F.log_softmax(x, dim=1)
-
-# --- 5. Fusion & Training ---
-def train_fusion_model(rgb_features, flow_features, skeleton_features, labels):
-    """
-    Trains a fusion model combining RGB, Optical Flow, and Skeleton features.
-
-    Parameters:
-        rgb_features (numpy array): RGB-based features.
-        flow_features (numpy array): Optical Flow-based features.
-        skeleton_features (numpy array): Skeleton-based features.
-        labels (numpy array): Ground truth labels.
-
-    Returns:
-        None
-    """
-    fused_features = np.concatenate([rgb_features, flow_features, skeleton_features], axis=1)
-
-    model = Sequential([
-        Bidirectional(LSTM(128, return_sequences=True), input_shape=(fused_features.shape[1], fused_features.shape[2])),
-        Flatten(),
-        Dense(64, activation='relu'),
-        Dense(10, activation='softmax')  # Adjust based on dataset
-    ])
-    model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-    model.fit(fused_features, labels, epochs=50, batch_size=32, validation_split=0.2)
-
-# --- 6. Full Pipeline Execution ---
+# --- 4. Full Pipeline Execution ---
 if __name__ == "__main__":
     video_path = "sign_language_video.mp4"
-    keyframes = extract_keyframes(video_path)
+    
+    # Assume skeleton_data is already extracted for the video
+    skeleton_data = [extract_skeleton(cv2.imread(f"frame_{i}.jpg")) for i in range(100)]  
+
+    keyframes = keyframe_extraction(video_path, skeleton_data)
 
     rgb_features, flow_features, skeleton_features = [], [], []
-    for frame in keyframes:
+    for idx in keyframes:
+        frame = cv2.imread(f"frame_{idx}.jpg")
         rgb_features.append(cv2.resize(frame, (256, 256)))
-        flow_features.append(cv2.Canny(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), 50, 150))  # Edge detection
+
+        # Compute Optical Flow
+        if idx > 0:
+            prev_frame = cv2.imread(f"frame_{idx - 1}.jpg")
+            u, v = compute_optical_flow_lk(prev_frame, frame)
+            flow_features.append(np.sqrt(u**2 + v**2).mean())  # Motion magnitude
+
         skeleton_features.append(extract_skeleton(frame))
 
     rgb_features = np.array(rgb_features)
-    flow_features = np.array(flow_features)
+    flow_features = np.array(flow_features).reshape(-1, 1)
     skeleton_features = np.array(skeleton_features)
 
     train_fusion_model(rgb_features, flow_features, skeleton_features, labels=np.random.randint(0, 10, size=(len(rgb_features), 10)))  
