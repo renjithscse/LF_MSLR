@@ -61,6 +61,6 @@ If you use our work, please cite:
 We welcome contributions! Please submit a pull request or open an issue.
 
 ## 📧 Contact
-For questions, contact [your-email@example.com](mailto:your-email@example.com).
+For questions, contact renjiths.cse@gmail.com.
 
 
