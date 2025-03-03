@@ -46,8 +46,16 @@ torch-geometric
 2. **Install dependencies**:
    ```bash
    pip install -r requirements.txt
+3 Preprocessing
+
+Use `preprocessing.py` to extract frames, compute optical flow, and extract skeleton data from videos.
+
+4 Data Loading
+
+`dataloader.py` defines the `SignLanguageDataset` class, which loads frames, skeletons, and labels for training.
+
    ```
-3. **Run the model**:
+5. **Run the model**:
    ```bash
    python train.py
    ```
